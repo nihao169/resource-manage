@@ -1,0 +1,14 @@
+services:
+  api:
+    environment:
+      FM_DATABASE_USER: fm_migrator
+      FM_DATABASE_PASSWORD_FILE: /run/secrets/pg_migrator_password
+    secrets: [pg_migrator_password]
+  storage_init:
+    profiles: [bootstrap]
+    image: ${MC_IMAGE}
+    entrypoint: ["/bin/sh", "/config/bootstrap.sh"]
+    secrets: [minio_root_password, minio_api_password, minio_backup_password]
+    volumes: [./configs/minio:/config:ro]
+    networks: [data]
+

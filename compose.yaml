@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    environment:
+      POSTGRES_USER: fm_bootstrap
+      POSTGRES_DB: file_manager
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_bootstrap_password
+    secrets: [pg_bootstrap_password, pg_migrator_password, pg_app_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./configs/postgres:/docker-entrypoint-initdb.d:ro
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fm_bootstrap -d file_manager"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+  minio:
+    image: ${MINIO_IMAGE}
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: fm_root
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    secrets: [minio_root_password]
+    volumes: [minio_data:/data]
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE}
+    environment:
+      FM_APP_ENV: ${APP_ENV:-development}
+      FM_PUBLIC_ORIGIN: https://${PUBLIC_HOST}:${HTTPS_PORT}
+    secrets: [pg_app_password, minio_api_password]
+    networks: [app, data]
+    depends_on:
+      postgres: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/ready', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  nginx:
+    build:
+      context: .
+      dockerfile: configs/nginx/Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE}
+        NGINX_IMAGE: ${NGINX_IMAGE}
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+      HTTPS_PORT: ${HTTPS_PORT}
+    ports:
+      - "127.0.0.1:${HTTPS_PORT}:443"
+      - "127.0.0.1:${HTTP_PORT}:80"
+    volumes: [./certs:/etc/nginx/certs:ro]
+    networks: [app]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://127.0.0.1/"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+    restart: unless-stopped
+networks:
+  app: {}
+  data: {internal: true}
+volumes:
+  postgres_data: {}
+  minio_data: {}
+secrets:
+  pg_bootstrap_password: {file: ./secrets/pg_bootstrap_password}
+  pg_migrator_password: {file: ./secrets/pg_migrator_password}
+  pg_app_password: {file: ./secrets/pg_app_password}
+  minio_root_password: {file: ./secrets/minio_root_password}
+  minio_api_password: {file: ./secrets/minio_api_password}
+  minio_backup_password: {file: ./secrets/minio_backup_password}

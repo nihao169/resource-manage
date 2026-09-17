@@ -1,0 +1,14 @@
+# C owns database/framework dependencies; D owns storage dependencies.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+pydantic>=2,<3
+pydantic-settings>=2,<3
+SQLAlchemy>=2,<3
+psycopg[binary]>=3,<4
+alembic>=1,<2
+minio>=7,<8
+cryptography>=44
+pytest>=8,<10
+httpx>=0.27,<1
+ruff>=0.8,<1
+

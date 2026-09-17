@@ -1,0 +1,69 @@
+limit_req_zone $binary_remote_addr zone=general:10m rate=20r/s;
+limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=refresh:10m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=parts:10m;
+map $request_id $edge_request_id {
+ "~^(?<uuid_a>[a-f0-9]{8})(?<uuid_b>[a-f0-9]{4})(?<uuid_c>[a-f0-9]{4})(?<uuid_d>[a-f0-9]{4})(?<uuid_e>[a-f0-9]{12})$" "$uuid_a-$uuid_b-$uuid_c-$uuid_d-$uuid_e";
+}
+server {
+ listen 80;
+ server_name ${PUBLIC_HOST};
+ return 308 https://${PUBLIC_HOST}:${HTTPS_PORT}$request_uri;
+}
+server {
+ listen 443 ssl;
+ server_name ${PUBLIC_HOST};
+ ssl_certificate /etc/nginx/certs/localhost.crt;
+ ssl_certificate_key /etc/nginx/certs/localhost.key;
+ ssl_protocols TLSv1.2 TLSv1.3;
+ client_max_body_size 34m;
+ add_header X-Content-Type-Options nosniff always;
+ root /usr/share/nginx/html;
+ limit_req_status 429;
+ error_page 413 = @too_large;
+ error_page 429 = @rate_limited;
+ location @too_large {
+   default_type application/json;
+   add_header X-Request-ID $edge_request_id always;
+   return 413 '{"error":{"code":"FILE_TOO_LARGE","message":"Request body exceeds limit","details":{}},"request_id":"$edge_request_id"}';
+ }
+ location @rate_limited {
+   default_type application/json;
+   add_header X-Request-ID $edge_request_id always;
+   add_header Retry-After 6 always;
+   return 429 '{"error":{"code":"RATE_LIMITED","message":"Too many requests","details":{}},"request_id":"$edge_request_id"}';
+ }
+ location = /api/health/ready { deny all; }
+ location = /api/auth/login {
+   limit_req zone=login burst=5 nodelay;
+   include /etc/nginx/snippets/api-proxy.conf;
+   proxy_read_timeout 60s;
+ }
+ location = /api/auth/refresh {
+   limit_req zone=refresh burst=5 nodelay;
+   include /etc/nginx/snippets/api-proxy.conf;
+   proxy_read_timeout 60s;
+ }
+ location ~ ^/api/uploads/[^/]+/parts/[0-9]+$ {
+   limit_conn parts 4;
+   limit_conn_status 429;
+   include /etc/nginx/snippets/api-proxy.conf;
+   proxy_read_timeout 300s;
+ }
+ location ~ ^/api/(uploads/[^/]+/complete|admin/files/[^/]+/purge|admin/cleanup-attempts/[^/]+/retry)$ {
+   limit_req zone=general burst=40 nodelay;
+   include /etc/nginx/snippets/api-proxy.conf;
+   proxy_read_timeout 660s;
+ }
+ location = /api/admin/backups {
+   limit_req zone=general burst=40 nodelay;
+   include /etc/nginx/snippets/api-proxy.conf;
+   proxy_read_timeout 3660s;
+ }
+ location /api/ {
+   limit_req zone=general burst=40 nodelay;
+   include /etc/nginx/snippets/api-proxy.conf;
+   proxy_read_timeout 60s;
+ }
+ location / { try_files $uri $uri/ /index.html; }
+}
