@@ -46,6 +46,10 @@ def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("migrate")
+    administrator = commands.add_parser("create-admin")
+    administrator.add_argument("--username", required=True)
+    administrator.add_argument("--display-name", required=True)
+    administrator.add_argument("--password-file", type=Path, required=True)
     certificate = commands.add_parser("certificate")
     certificate.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args()
@@ -55,6 +59,24 @@ def main():
         from alembic.config import Config
         from alembic import command
         command.upgrade(Config("alembic.ini"), "head")
+    elif args.command == "create-admin":
+        from sqlalchemy import text
+        from app.core.config import Settings
+        from app.core.database import create_database_engine
+        from app.core.security import hash_password
+        password = args.password_file.read_text(encoding="utf-8").strip()
+        if not 12 <= len(password) <= 128:
+            raise ValueError("Administrator password must contain 12-128 characters")
+        engine = create_database_engine(Settings())
+        try:
+            with engine.begin() as connection:
+                connection.execute(text("""
+                    INSERT INTO users(username,display_name,password_hash,role)
+                    VALUES (:username,:display_name,:password_hash,'admin')
+                """), {"username": args.username.strip(), "display_name": args.display_name.strip(),
+                    "password_hash": hash_password(password)})
+        finally:
+            engine.dispose()
 
 if __name__ == "__main__":
     main()

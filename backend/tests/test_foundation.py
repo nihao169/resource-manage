@@ -28,10 +28,15 @@ def test_live_and_request_identifier(monkeypatch):
     resources.storage.close.assert_called_once()
     resources.engine.dispose.assert_called_once()
 
-def test_missing_business_routes_and_production_docs():
+def test_business_routes_are_protected_and_production_docs_are_hidden():
     resources = fake_resources()
     with TestClient(create_app(Settings(app_env="production"), lambda _: resources)) as client:
-        for route in ("/api/files", "/api/auth/login", "/api/docs", "/api/openapi.json"):
+        result = client.get("/api/files")
+        assert result.status_code == 401
+        assert result.json()["error"]["code"] == "UNAUTHENTICATED"
+        result = client.get("/api/auth/login")
+        assert result.status_code == 405
+        for route in ("/api/docs", "/api/openapi.json"):
             result = client.get(route)
             assert result.status_code == 404
             assert result.json()["error"]["code"] == "NOT_FOUND"
