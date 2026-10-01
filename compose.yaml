@@ -40,7 +40,7 @@ services:
     environment:
       FM_APP_ENV: ${APP_ENV:-development}
       FM_PUBLIC_ORIGIN: https://${PUBLIC_HOST}:${HTTPS_PORT}
-    secrets: [pg_app_password, minio_api_password]
+    secrets: [pg_app_password, minio_api_password, jwt_key, csrf_key, confirmation_key]
     networks: [app, data]
     depends_on:
       postgres: {condition: service_healthy}
@@ -87,3 +87,6 @@ secrets:
   minio_root_password: {file: ./secrets/minio_root_password}
   minio_api_password: {file: ./secrets/minio_api_password}
   minio_backup_password: {file: ./secrets/minio_backup_password}
+  jwt_key: {file: ./secrets/jwt_key}
+  csrf_key: {file: ./secrets/csrf_key}
+  confirmation_key: {file: ./secrets/confirmation_key}

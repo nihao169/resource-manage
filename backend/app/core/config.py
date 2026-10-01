@@ -13,10 +13,16 @@ class Settings(BaseSettings):
     database_name: str = "file_manager"
     database_user: str = "fm_app"
     database_password_file: Path = Path("/run/secrets/pg_app_password")
+    jwt_key_file: Path = Path("/run/secrets/jwt_key")
+    csrf_key_file: Path = Path("/run/secrets/csrf_key")
+    confirmation_key_file: Path = Path("/run/secrets/confirmation_key")
     minio_endpoint: str = "minio:9000"
     minio_access_key: str = "fm_api"
     minio_secret_key_file: Path = Path("/run/secrets/minio_api_password")
     minio_secure: bool = False
+    cookie_secure: bool = True
+    access_ttl_seconds: int = Field(default=900, ge=300, le=900)
+    refresh_ttl_seconds: int = Field(default=604800, ge=86400, le=604800)
 
     @staticmethod
     def read_secret(secret_file: Path) -> str:

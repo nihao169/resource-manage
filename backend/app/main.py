@@ -10,6 +10,7 @@ from app.core.config import Settings
 from app.core.errors import BusinessError, error_response
 from app.core.resources import make_resources
 from app.services.health_service import HealthService
+from app.api import admin, audit, auth, directories, files, search, spaces, versions
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ def create_app(settings: Settings | None = None, resource_factory=make_resources
     application = FastAPI(title="File Manager Skeleton", lifespan=lifespan,
         docs_url="/api/docs" if development else None,
         openapi_url="/api/openapi.json" if development else None, redoc_url=None)
+    application.state.settings = settings
 
     @application.middleware("http")
     async def request_identifier(request: Request, call_next):
@@ -64,6 +66,10 @@ def create_app(settings: Settings | None = None, resource_factory=make_resources
     async def ready(request: Request):
         data = await anyio.to_thread.run_sync(HealthService(application.state.resources).ready)
         return {"data": data, "request_id": str(request.state.request_id)}
+
+    for business_router in (auth.router, spaces.router, directories.router, files.recycle_router,
+                            files.router, search.router, versions.router, admin.router, audit.router):
+        application.include_router(business_router, prefix="/api")
 
     return application
 

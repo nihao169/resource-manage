@@ -15,7 +15,9 @@ anyio==4.15.1
     #   httpx
     #   starlette
 argon2-cffi==25.1.0
-    # via minio
+    # via
+    #   -r backend/requirements.in
+    #   minio
 argon2-cffi-bindings==26.1.0
     # via argon2-cffi
 certifi==2026.7.22
