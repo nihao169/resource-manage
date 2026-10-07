@@ -5,7 +5,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Invalid compose configuration' }
     $port = ($configuration.services.nginx.ports | Where-Object target -eq 443).published
     $base = "https://localhost:$port"
-    foreach ($case in @(@('/',200),@('/api/health/live',200),@('/api/files',404),@('/api/health/ready',403),@('/uploads',200))) {
+    foreach ($case in @(@('/',200),@('/api/health/live',200),@('/api/files',401),@('/api/health/ready',403),@('/uploads',200))) {
         $status = & curl.exe --noproxy '*' -k -s -o NUL -w '%{http_code}' "$base$($case[0])"
         if ($LASTEXITCODE -ne 0 -or [int]$status -ne $case[1]) { throw "Smoke failed: $($case[0]) ($status)" }
     }
