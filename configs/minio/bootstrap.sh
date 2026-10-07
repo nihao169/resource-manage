@@ -11,4 +11,3 @@ mc admin policy attach internal fm-business --user fm_api
 mc admin user add internal fm_backup "$(cat /run/secrets/minio_backup_password)" >/dev/null
 mc admin policy create internal fm-backup /config/backup-policy.json
 mc admin policy attach internal fm-backup --user fm_backup
-
