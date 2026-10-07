@@ -1,10 +1,10 @@
 from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
-from app.core.database import transaction
 from app.core.errors import BusinessError
 from app.core.security import require_admin
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.directory_repository import DirectoryRepository
+from app.repositories.idempotency_repository import IdempotencyRepository
 from app.repositories.space_repository import SpaceRepository
 
 class DirectoryService:
@@ -13,6 +13,8 @@ class DirectoryService:
         self.directories = DirectoryRepository()
         self.spaces = SpaceRepository()
         self.audit = AuditRepository()
+        self.idempotency = IdempotencyRepository()
+        self.replayed = False
 
     @staticmethod
     def render(row):
@@ -39,12 +41,18 @@ class DirectoryService:
                 raise BusinessError("NOT_FOUND", "目录不存在", 404)
         return self.render(row)
 
-    def create(self, actor, payload, request_id):
+    def create(self, actor, payload, request_id, idempotency_key):
         require_admin(actor)
         try:
-            with transaction(self.engine) as connection:
+            with self.idempotency.locked_transaction(
+                    self.engine, actor.user_id, idempotency_key) as connection:
                 if not self.spaces.authorize(connection, actor, payload.space_id, write=True):
                     raise BusinessError("NOT_FOUND", "空间不存在", 404)
+                claim = self.idempotency.claim(connection, actor_id=actor.user_id,
+                    key=idempotency_key, method="POST", path="/api/directories", payload=payload)
+                if claim.replayed:
+                    self.replayed = True
+                    return claim.response_data
                 parent_path = "/"
                 if payload.parent_id:
                     parent = self.directories.by_id(connection, payload.parent_id, for_update=True)
@@ -56,20 +64,34 @@ class DirectoryService:
                     actor_id=actor.user_id, parent_path=parent_path)
                 self.audit.append(connection, actor_id=actor.user_id, action="directory.created",
                     target_type="directory", target_id=row["id"], request_id=request_id)
+                data = self.render(row)
+                self.idempotency.complete(connection, claim, data, http_status=201,
+                    target_type="directory", target_id=row["id"])
         except IntegrityError:
             raise BusinessError("NAME_CONFLICT", "同级目录名称已存在", 409) from None
-        return self.render(row)
+        return data
 
-    def rename(self, actor, directory_id, name, request_id):
+    def rename(self, actor, directory_id, name, request_id, idempotency_key):
         require_admin(actor)
         try:
-            with transaction(self.engine) as connection:
+            with self.idempotency.locked_transaction(
+                    self.engine, actor.user_id, idempotency_key) as connection:
                 row = self.directories.by_id(connection, directory_id, for_update=True)
                 if not row:
                     raise BusinessError("NOT_FOUND", "目录不存在", 404)
+                path = f"/api/directories/{directory_id}"
+                claim = self.idempotency.claim(connection, actor_id=actor.user_id,
+                    key=idempotency_key, method="PATCH", path=path,
+                    payload={"name": name})
+                if claim.replayed:
+                    self.replayed = True
+                    return claim.response_data
                 row = self.directories.rename(connection, directory_id, name)
                 self.audit.append(connection, actor_id=actor.user_id, action="directory.renamed",
                     target_type="directory", target_id=directory_id, request_id=request_id)
+                data = self.render(row)
+                self.idempotency.complete(connection, claim, data,
+                    target_type="directory", target_id=directory_id)
         except IntegrityError:
             raise BusinessError("NAME_CONFLICT", "同级目录名称已存在", 409) from None
-        return self.render(row)
+        return data

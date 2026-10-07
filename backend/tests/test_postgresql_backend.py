@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
+from uuid import uuid4
 import pytest
 
 from app.core.errors import BusinessError
@@ -7,6 +9,7 @@ from app.core.security import (create_csrf_token, decode_token, encode_token, ha
 from app.models import (AuditEvent, ContentObject, Directory, File, FileVersion,
                         RefreshSession, Space, SpaceMember, Upload, UploadPart, User)
 from app.schemas.dto import PatchFile, normalize_name
+from app.repositories.idempotency_repository import IdempotencyRepository, request_fingerprint
 
 def test_password_hash_is_argon2_and_verifies():
     encoded = hash_password("correct horse battery staple")
@@ -54,3 +57,34 @@ def test_mvp_mappings_share_migration_base():
         FileVersion, RefreshSession, Space, SpaceMember, Upload, UploadPart, User)} == {
         "audit_events", "content_objects", "directories", "files", "file_versions",
         "refresh_sessions", "spaces", "space_members", "uploads", "upload_parts", "users"}
+
+def test_idempotency_fingerprint_is_canonical():
+    first = request_fingerprint("post", "/api/spaces", {"name": "A", "quota": 10})
+    second = request_fingerprint("POST", "/api/spaces", {"quota": 10, "name": "A"})
+    assert first == second
+
+def test_completed_idempotency_claim_replays_snapshot():
+    actor_id, request_id = uuid4(), uuid4()
+    payload = {"name": "documents"}
+    connection = MagicMock()
+    result = connection.execute.return_value.mappings.return_value
+    result.first.return_value = {"id": request_id, "method": "POST", "path": "/api/spaces",
+        "request_hash": request_fingerprint("POST", "/api/spaces", payload),
+        "status": "completed", "http_status": 201,
+        "response_data": {"space_id": str(uuid4())}}
+    claim = IdempotencyRepository().claim(connection, actor_id=actor_id, key="request-123",
+        method="POST", path="/api/spaces", payload=payload)
+    assert claim.replayed is True
+    assert claim.http_status == 201
+    assert claim.response_data["space_id"]
+
+def test_reused_idempotency_key_with_different_payload_conflicts():
+    connection = MagicMock()
+    result = connection.execute.return_value.mappings.return_value
+    result.first.return_value = {"id": uuid4(), "method": "POST", "path": "/api/spaces",
+        "request_hash": request_fingerprint("POST", "/api/spaces", {"name": "A"}),
+        "status": "completed", "http_status": 201, "response_data": {}}
+    with pytest.raises(BusinessError) as failure:
+        IdempotencyRepository().claim(connection, actor_id=uuid4(), key="request-123",
+            method="POST", path="/api/spaces", payload={"name": "B"})
+    assert failure.value.code == "IDEMPOTENCY_CONFLICT"

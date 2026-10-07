@@ -1,10 +1,10 @@
 from uuid import uuid4
 from sqlalchemy import text
-from app.core.database import transaction
 from app.core.errors import BusinessError
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.file_repository import FileRepository
-from app.services.file_service import FileService, render_version
+from app.repositories.idempotency_repository import IdempotencyRepository
+from app.services.file_service import FileService, render_file, render_version
 
 class VersionService:
     def __init__(self, resources):
@@ -12,6 +12,8 @@ class VersionService:
         self.engine = resources.engine
         self.files = FileRepository()
         self.audit = AuditRepository()
+        self.idempotency = IdempotencyRepository()
+        self.replayed = False
 
     def list(self, actor, file_id, page, page_size):
         FileService(self.resources).get(actor, file_id)
@@ -29,13 +31,20 @@ class VersionService:
             raise BusinessError("VERSION_NOT_FOUND", "版本不存在", 404)
         return render_version(row)
 
-    def restore(self, actor, file_id, payload, request_id):
-        with transaction(self.engine) as connection:
+    def restore(self, actor, file_id, payload, request_id, idempotency_key):
+        path = f"/api/files/{file_id}/versions/restore"
+        with self.idempotency.locked_transaction(
+                self.engine, actor.user_id, idempotency_key) as connection:
             file_row = self.files.visible(connection, actor, file_id, for_update=True)
             if not file_row:
                 raise BusinessError("FILE_NOT_FOUND", "文件不存在", 404)
             if actor.role != "admin" and file_row["owner_id"] != actor.user_id:
                 raise BusinessError("FORBIDDEN", "无权管理该文件", 403)
+            claim = self.idempotency.claim(connection, actor_id=actor.user_id,
+                key=idempotency_key, method="POST", path=path, payload=payload)
+            if claim.replayed:
+                self.replayed = True
+                return claim.response_data
             if payload.expected_current_version_id and file_row["current_version_id"] != payload.expected_current_version_id:
                 raise BusinessError("VERSION_CONFLICT", "当前版本已变化", 409)
             source = connection.execute(text("""
@@ -73,7 +82,10 @@ class VersionService:
             self.audit.append(connection, actor_id=actor.user_id, action="version.restored",
                 target_type="file", target_id=file_id, request_id=request_id,
                 detail={"source_version_id": str(source["id"]), "version_id": str(version_id)})
-        file_data = FileService(self.resources).get(actor, file_id)
-        version_data = self.get(actor, file_id, version_id)
-        return {"upload_id": None, "file": file_data, "version": version_data}
+            file_data = render_file(self.files.visible(connection, actor, file_id))
+            version_data = render_version(self.files.version(connection, file_id, version_id))
+            data = {"upload_id": None, "file": file_data, "version": version_data}
+            self.idempotency.complete(connection, claim, data, http_status=201,
+                target_type="file", target_id=file_id)
+        return data
 

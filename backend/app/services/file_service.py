@@ -1,7 +1,7 @@
-from app.core.database import transaction
 from app.core.errors import BusinessError
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.file_repository import FileRepository
+from app.repositories.idempotency_repository import IdempotencyRepository
 
 def render_version(row):
     return {"version_id": row["version_id"] if "version_id" in row else row["id"],
@@ -36,6 +36,8 @@ class FileService:
         self.engine = resources.engine
         self.files = FileRepository()
         self.audit = AuditRepository()
+        self.idempotency = IdempotencyRepository()
+        self.replayed = False
 
     def list(self, actor, query, *, status="active"):
         if status == "deleted" and query.owner_id not in (None, actor.user_id) and actor.role != "admin":
@@ -62,37 +64,67 @@ class FileService:
         if actor.role != "admin" and row["owner_id"] != actor.user_id:
             raise BusinessError("FORBIDDEN", "无权管理该文件", 403)
 
-    def patch(self, actor, file_id, payload, request_id):
-        with transaction(self.engine) as connection:
+    def patch(self, actor, file_id, payload, request_id, idempotency_key):
+        path = f"/api/files/{file_id}"
+        with self.idempotency.locked_transaction(
+                self.engine, actor.user_id, idempotency_key) as connection:
             row = self.files.visible(connection, actor, file_id, for_update=True)
             if not row:
                 raise BusinessError("FILE_NOT_FOUND", "文件不存在", 404)
             self._managed(actor, row)
+            claim = self.idempotency.claim(connection, actor_id=actor.user_id,
+                key=idempotency_key, method="PATCH", path=path, payload=payload)
+            if claim.replayed:
+                self.replayed = True
+                return claim.response_data
             self.files.patch(connection, file_id, name=payload.name, description=payload.description)
             self.audit.append(connection, actor_id=actor.user_id, action="file.updated",
                 target_type="file", target_id=file_id, request_id=request_id)
-        return self.get(actor, file_id)
+            data = render_file(self.files.visible(connection, actor, file_id))
+            self.idempotency.complete(connection, claim, data,
+                target_type="file", target_id=file_id)
+        return data
 
-    def delete(self, actor, file_id, request_id):
-        with transaction(self.engine) as connection:
+    def delete(self, actor, file_id, request_id, idempotency_key):
+        path = f"/api/files/{file_id}"
+        with self.idempotency.locked_transaction(
+                self.engine, actor.user_id, idempotency_key) as connection:
             row = self.files.visible(connection, actor, file_id, include_deleted=True, for_update=True)
             if not row:
                 raise BusinessError("FILE_NOT_FOUND", "文件不存在", 404)
             self._managed(actor, row)
+            claim = self.idempotency.claim(connection, actor_id=actor.user_id,
+                key=idempotency_key, method="DELETE", path=path, payload={})
+            if claim.replayed:
+                self.replayed = True
+                return claim.response_data
             if row["status"] == "active":
                 self.files.soft_delete(connection, file_id, actor.user_id)
                 self.audit.append(connection, actor_id=actor.user_id, action="file.deleted",
                     target_type="file", target_id=file_id, request_id=request_id)
-        return {"file_id": file_id, "status": "deleted"}
+            data = {"file_id": file_id, "status": "deleted"}
+            self.idempotency.complete(connection, claim, data,
+                target_type="file", target_id=file_id)
+        return data
 
-    def restore(self, actor, file_id, request_id):
-        with transaction(self.engine) as connection:
+    def restore(self, actor, file_id, request_id, idempotency_key):
+        path = f"/api/files/{file_id}/restore"
+        with self.idempotency.locked_transaction(
+                self.engine, actor.user_id, idempotency_key) as connection:
             row = self.files.visible(connection, actor, file_id, include_deleted=True, for_update=True)
             if not row:
                 raise BusinessError("FILE_NOT_FOUND", "文件不存在", 404)
             self._managed(actor, row)
+            claim = self.idempotency.claim(connection, actor_id=actor.user_id,
+                key=idempotency_key, method="POST", path=path, payload={})
+            if claim.replayed:
+                self.replayed = True
+                return claim.response_data
             if row["status"] == "deleted":
                 self.files.restore(connection, file_id)
                 self.audit.append(connection, actor_id=actor.user_id, action="file.restored",
                     target_type="file", target_id=file_id, request_id=request_id)
-        return self.get(actor, file_id)
+            data = render_file(self.files.visible(connection, actor, file_id))
+            self.idempotency.complete(connection, claim, data,
+                target_type="file", target_id=file_id)
+        return data

@@ -29,4 +29,14 @@
 - 本机未安装 Docker，因此本次没有启动 PostgreSQL 17 / MinIO 容器；需要在具备 Docker 的环境运行 `scripts/init.ps1` 后，再设置 `FM_INTEGRATION_TESTS=1` 执行真实账号权限、迁移和 Bucket 集成测试。
 - 上传二进制、MinIO 对象发布和下载流由 MinIO 负责人实现；其 Service 应使用同一个 pinned connection 调用 `DatabaseContractService`，并遵守 `contracts.py` 的锁与事务边界。
 - 标签、自定义元数据、完整用户管理、目录移动/删除、保留策略和物理清理 HTTP 编排属于契约标记的延期功能，本次没有注册伪成功接口。
-- 元数据修改端点已经强制校验 `Idempotency-Key` 格式；上传最终提交会原子写入幂等结果。通用元数据端点的完整结果重放缓存仍需在团队联调阶段补齐后再宣称通过并发幂等验收。
+- 元数据修改端点强制校验 `Idempotency-Key`；上传最终提交和通用元数据写操作均原子写入幂等结果。
+
+## 2026-10-07 补充开发
+
+- 新增统一幂等 Repository，按 actor 与幂等键获取 advisory lock，并对 HTTP 方法、完整路径和规范化请求体计算 SHA-256 指纹。
+- 空间、成员、目录、文件元数据、软删除/恢复和历史版本恢复已将业务变更、成功审计与结果快照放入同一事务。
+- 相同键、相同请求返回首次结果并设置 `Idempotency-Replayed: true`；相同键用于不同方法、路径或请求体时返回 `IDEMPOTENCY_CONFLICT`。
+- 重放前仍重新执行当前账号、空间和资源权限检查，不会在权限撤销后直接返回旧成功结果。
+- 更新 README 的实现状态，移除骨架阶段“认证、搜索、版本均未实现”的过期说明。
+- 新增 PostgreSQL 真实集成用例，验证 advisory lock、JSONB 结果快照、成功重放和请求指纹冲突；本地无 Docker 时按既有开关跳过。
+- 本轮回归：`ruff` 通过，`pytest` 为 22 项通过、6 项真实依赖测试跳过，OpenAPI 仍为 30 条路径。

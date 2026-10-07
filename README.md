@@ -42,7 +42,7 @@ docker compose stop
 
 B、C 共同开发一个 FastAPI 服务，不是只操作数据库、不另建服务。上传 Service 的最终事务、锁顺序和权限由 B/C 协商，数据库方法契约在 app/services/contracts.py。传入同一 pinned Connection，由 Service 控制事务；Repository 与 MinIO 适配层不得自行 commit。上传状态仅使用 created/uploading/uploaded/committed/failed/expired。
 
-空的业务路由故意未注册；登录、上传、文件、版本等请求返回统一 JSON 404。实现一个模块并测试通过后，才在 app/main.py 注册对应 router。禁止把示例数据当作成功结果。models 仅有模块位置，未重复生成不完整 ORM；现阶段不得使用 autogenerate 或 create_all，DDL 以首次迁移和契约为准。
+只有已实现并通过测试的业务路由才在 `app/main.py` 注册；未完成模块继续返回统一 JSON 404，禁止用示例数据伪造成功结果。ORM 只映射既有迁移，不使用 autogenerate 或 `create_all`，DDL 仍以首次迁移和契约为准。
 
 ## 已实现基础能力
 
@@ -53,8 +53,11 @@ B、C 共同开发一个 FastAPI 服务，不是只操作数据库、不另建�
 - Vue 模块入口和真实 live 检查，无默认 Mock。
 - Nginx 保留 /api 前缀代理，SPA 回退，34 MiB 请求上限，HTTP/1.1 流式传输；普通查询/分片/提交与清理/备份超时分别为 60/300/660/3660 秒。登录与刷新分别限流 10/30 次每分钟，普通 API 20 次每秒，分片每 IP 最多 4 个并发；413/429 返回 JSON。ready 对外 403。
 - 首次迁移完整落地文档 22 张表、约束、函数、触发器和配置种子；启动 API 不执行迁移。
+- 已实现认证 Cookie、会话撤销、CSRF/Origin 校验、空间与成员、目录、文件元数据、搜索、版本恢复、回收站、审计和配置/备份记录查询。
+- 元数据修改使用 `Idempotency-Key` 请求指纹与结果快照；业务更新、审计和幂等完成记录在同一数据库事务提交，重放前重新检查当前权限。
+- `DatabaseContractService` 提供上传记录、分片确认/续传、内容对象、上传提交、下载授权及清理检查点的数据库侧方法，供传输模块在 pinned connection 上调用。
 
-认证 Cookie、CSRF、权限、上传/下载、搜索、版本和回收站尚未实现。客户端仅预留 credentials 与修改请求 CSRF 头，不等于服务端已实现安全检查。上传默认 8 MiB 分片、4 并发、24h 会话由后续业务读取已有 settings 实现。
+MinIO 二进制分片、对象发布和流式下载仍由传输负责人实现，相关空路由未注册。上传默认 8 MiB 分片、4 并发、24h 会话由传输 Service 读取已有 settings，并调用上述数据库契约完成最终提交。
 
 ## 凭据与存储
 
@@ -67,7 +70,7 @@ secrets/ 和 certs/ 被 Git 与 Docker 构建忽略。Compose 只挂载必要文
 - fm_api：uploads/contents 业务操作。
 - fm_backup：读取 contents，管理 backups，仅备份流程使用。
 
-三个 Bucket 均私有；正式对象没有日期自动过期规则。业务尚未实现，不能手动写正式对象代替上传校验。数据存储于命名卷，账号初始化依赖 PostgreSQL 空卷初始化流程。密钥目录应只向项目开发者开放，不提交、不截图、不在日志打印。
+三个 Bucket 均私有；正式对象没有日期自动过期规则。传输流程完成前不能手动写正式对象代替上传校验。数据存储于命名卷，账号初始化依赖 PostgreSQL 空卷初始化流程。密钥目录应只向项目开发者开放，不提交、不截图、不在日志打印。
 
 MinIO 官方社区仓库目前归档，Docker Hub 历史镜像已不可直接依赖。本骨架固定 Quay 的历史服务端与 mc 镜像摘要，仅用于开发验证；上线前必须评估维护、安全与许可，不把历史镜像当作受维护的生产选择。参见 [MinIO 官方仓库](https://github.com/minio/minio)。镜像摘要与解析后 Python/Node 依赖均固定，升级需重新测试 S3 兼容性。
 
