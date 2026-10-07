@@ -8,6 +8,8 @@ from minio.error import S3Error
 from app.core.config import Settings
 from app.core.database import create_database_engine, check_database
 from app.integrations.minio_client import MinioAdapter
+from app.core.errors import BusinessError
+from app.repositories.idempotency_repository import IdempotencyRepository
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("FM_INTEGRATION_TESTS") != "1", reason="Requires initialized project storage")
@@ -65,3 +67,36 @@ def test_private_buckets_and_backup_isolation():
             storage.client.stat_object("contents", "probe/" + str(uuid4()))
     finally:
         storage.close()
+
+def test_idempotency_claim_replay_and_conflict_on_postgres(engine):
+    actor_id = uuid4()
+    key = "integration-" + str(uuid4())
+    repository = IdempotencyRepository()
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO users(id,username,display_name,password_hash)
+            VALUES (:id,:username,'Integration test','$argon2id$test')
+        """), {"id": actor_id, "username": "integration-" + str(actor_id)})
+    try:
+        with repository.locked_transaction(engine, actor_id, key) as connection:
+            claim = repository.claim(connection, actor_id=actor_id, key=key,
+                method="POST", path="/api/spaces", payload={"name": "integration"})
+            assert not claim.replayed
+            repository.complete(connection, claim, {"space_id": str(uuid4())},
+                http_status=201, target_type="space", target_id=None)
+        with repository.locked_transaction(engine, actor_id, key) as connection:
+            replay = repository.claim(connection, actor_id=actor_id, key=key,
+                method="POST", path="/api/spaces", payload={"name": "integration"})
+            assert replay.replayed
+            assert replay.http_status == 201
+            assert replay.response_data["space_id"]
+        with pytest.raises(BusinessError) as failure:
+            with repository.locked_transaction(engine, actor_id, key) as connection:
+                repository.claim(connection, actor_id=actor_id, key=key,
+                    method="POST", path="/api/spaces", payload={"name": "different"})
+        assert failure.value.code == "IDEMPOTENCY_CONFLICT"
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "DELETE FROM idempotency_requests WHERE actor_id=:actor"), {"actor": actor_id})
+            connection.execute(text("DELETE FROM users WHERE id=:actor"), {"actor": actor_id})

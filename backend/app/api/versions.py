@@ -1,6 +1,6 @@
 from typing import Annotated
 from uuid import UUID
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from app.core.security import (CurrentActor, current_actor, ensure_business_access,
                                require_csrf, require_idempotency_key)
 from app.schemas.dto import RestoreVersion
@@ -18,12 +18,18 @@ def list_versions(file_id: UUID, request: Request,
     return env(request, VersionService(request.app.state.resources).list(actor, file_id, page, page_size))
 
 @router.post("/files/{file_id}/versions/restore", status_code=201,
-             dependencies=[Depends(require_csrf), Depends(require_idempotency_key)])
+             dependencies=[Depends(require_csrf)])
 def restore_version(file_id: UUID, payload: RestoreVersion, request: Request,
-                    actor: Annotated[CurrentActor, Depends(current_actor)]):
+                    response: Response,
+                    actor: Annotated[CurrentActor, Depends(current_actor)],
+                    idempotency_key: Annotated[str, Depends(require_idempotency_key)]):
     ensure_business_access(actor)
-    return env(request, VersionService(request.app.state.resources).restore(
-        actor, file_id, payload, request.state.request_id))
+    current_service = VersionService(request.app.state.resources)
+    data = current_service.restore(actor, file_id, payload,
+        request.state.request_id, idempotency_key)
+    if current_service.replayed:
+        response.headers["Idempotency-Replayed"] = "true"
+    return env(request, data)
 
 @router.get("/files/{file_id}/versions/{version_id}")
 def get_version(file_id: UUID, version_id: UUID, request: Request,

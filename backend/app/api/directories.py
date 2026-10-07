@@ -1,6 +1,6 @@
 from typing import Annotated
 from uuid import UUID
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from app.core.security import (CurrentActor, current_actor, ensure_business_access,
                                require_csrf, require_idempotency_key)
 from app.schemas.dto import CreateDirectory, PatchDirectory
@@ -12,6 +12,11 @@ def env(request, data):
 
 def service(request):
     return DirectoryService(request.app.state.resources)
+
+def idempotent_response(request, response, current_service, data):
+    if current_service.replayed:
+        response.headers["Idempotency-Replayed"] = "true"
+    return env(request, data)
 
 @router.get("")
 def list_directories(request: Request, space_id: UUID,
@@ -27,12 +32,14 @@ def directory_tree(request: Request, space_id: UUID,
     ensure_business_access(actor)
     return env(request, service(request).list(actor, space_id, None, 1, 10000, tree=True))
 
-@router.post("", status_code=201,
-             dependencies=[Depends(require_csrf), Depends(require_idempotency_key)])
-def create_directory(payload: CreateDirectory, request: Request,
-                     actor: Annotated[CurrentActor, Depends(current_actor)]):
+@router.post("", status_code=201, dependencies=[Depends(require_csrf)])
+def create_directory(payload: CreateDirectory, request: Request, response: Response,
+                     actor: Annotated[CurrentActor, Depends(current_actor)],
+                     idempotency_key: Annotated[str, Depends(require_idempotency_key)]):
     ensure_business_access(actor)
-    return env(request, service(request).create(actor, payload, request.state.request_id))
+    current_service = service(request)
+    data = current_service.create(actor, payload, request.state.request_id, idempotency_key)
+    return idempotent_response(request, response, current_service, data)
 
 @router.get("/{directory_id}")
 def get_directory(directory_id: UUID, request: Request,
@@ -40,10 +47,13 @@ def get_directory(directory_id: UUID, request: Request,
     ensure_business_access(actor)
     return env(request, service(request).get(actor, directory_id))
 
-@router.patch("/{directory_id}",
-              dependencies=[Depends(require_csrf), Depends(require_idempotency_key)])
+@router.patch("/{directory_id}", dependencies=[Depends(require_csrf)])
 def patch_directory(directory_id: UUID, payload: PatchDirectory, request: Request,
-                    actor: Annotated[CurrentActor, Depends(current_actor)]):
+                    response: Response,
+                    actor: Annotated[CurrentActor, Depends(current_actor)],
+                    idempotency_key: Annotated[str, Depends(require_idempotency_key)]):
     ensure_business_access(actor)
-    return env(request, service(request).rename(actor, directory_id, payload.name,
-        request.state.request_id))
+    current_service = service(request)
+    data = current_service.rename(actor, directory_id, payload.name,
+        request.state.request_id, idempotency_key)
+    return idempotent_response(request, response, current_service, data)
