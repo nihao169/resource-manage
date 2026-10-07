@@ -37,6 +37,9 @@ services:
       dockerfile: backend/Dockerfile
       args:
         PYTHON_IMAGE: ${PYTHON_IMAGE}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
+        PIP_RETRIES: ${PIP_RETRIES:-10}
     environment:
       FM_APP_ENV: ${APP_ENV:-development}
       FM_PUBLIC_ORIGIN: https://${PUBLIC_HOST}:${HTTPS_PORT}
@@ -58,6 +61,9 @@ services:
       args:
         NODE_IMAGE: ${NODE_IMAGE}
         NGINX_IMAGE: ${NGINX_IMAGE}
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org}
+        NPM_CONFIG_FETCH_RETRIES: ${NPM_CONFIG_FETCH_RETRIES:-5}
+        NPM_CONFIG_FETCH_TIMEOUT: ${NPM_CONFIG_FETCH_TIMEOUT:-300000}
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST}
       HTTPS_PORT: ${HTTPS_PORT}
